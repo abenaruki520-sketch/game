@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Minecraft Style Dodge</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        body {
+            background-color: #121212;
+            color: #ffffff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            width: 100%;
+            max-width: 360px;
+            height: 600px;
+            background-color: #1e1e1e;
+            border: 3px solid #55ff55;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 0 20px rgba(85, 255, 85, 0.3);
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            background: #111;
+        }
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.88);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 20px;
+        }
+        .overlay.hidden {
+            display: none !important;
+        }
+        .overlay.visible {
+            display: flex !important;
+        }
+        h1 {
+            color: #55ff55;
+            margin-bottom: 10px;
+            font-size: 24px;
+            text-shadow: 0 0 8px #55ff55;
+        }
+        p {
+            color: #dddddd;
+            margin-bottom: 15px;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+        .rule-box {
+            text-align: left;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 10px 14px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            font-size: 12px;
+            color: #aaffaa;
+            line-height: 1.5;
+        }
+        button {
+            padding: 12px 28px;
+            font-size: 16px;
+            font-weight: bold;
+            color: #000000;
+            background-color: #55ff55;
+            border: none;
+            border-radius: 20px;
+            cursor: pointer;
+            box-shadow: 0 0 10px #55ff55;
+        }
+        button:active {
+            transform: scale(0.95);
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="gameCanvas" width="360" height="600"></canvas>
+
+    <!-- スタート画面 -->
+    <div id="start-screen" class="overlay visible">
+        <h1>CRAFT DODGE</h1>
+        <div class="rule-box">
+            ・👤 プレイヤー：スティーブ（高速移動）<br>
+            ・👾 障害物：クリーパー（高速落下）<br>
+            ・🛡️ 落ちてくる「盾」を取るとガード獲得<br>
+            ・✨ オーブ獲得で300pt！1秒以内連取で+10！<br>
+            ・🏆 ベストスコア記録機能付き
+        </div>
+        <p>【操作】<br>PC: ◀ / ▶ キー<br>スマホ: 画面左右タップ</p>
+        <button id="start-btn">ゲームスタート</button>
+    </div>
+
+    <!-- ゲームオーバー画面 -->
+    <div id="gameover-screen" class="overlay hidden">
+        <h1 style="color: #ff4444; text-shadow: 0 0 8px #ff4444;">GAME OVER</h1>
+        <p id="score-text" style="font-size: 18px; font-weight: bold; margin-bottom: 5px;">SCORE: 0</p>
+        <p id="best-score-text" style="font-size: 16px; color: #ffcc00; margin-bottom: 20px;">BEST SCORE: 0</p>
+        <button id="retry-btn">もう一度プレイ</button>
+    </div>
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+let gameState = 'START';
+let score = 0;
+let bestScore = 0;
+let frameCount = 0;
+let guardCount = 0;
+const MAX_GUARD = 3;
+let invincibleTimer = 0;
+let lastOrbTime = 0;
+
+// ハイスコア（ベストスコア）読み込み
+try {
+    const saved = localStorage.getItem('craft_dodge_best');
+    if (saved) {
+        bestScore = parseInt(saved, 10) || 0;
+    }
+} catch (e) {
+    bestScore = 0;
+}
+
+const player = {
+    x: 160,
+    y: 500,
+    width: 36,
+    height: 48,
+    speed: 8
+};
+
+let obstacles = [];
+let expOrbs = [];
+let shields = [];
+let popups = [];
+
+const keys = { left: false, right: false };
+
+window.addEventListener('keydown', function(e) {
+    if (e.key === 'ArrowLeft' || e.key === 'a') keys['left'] = true;
+    if (e.key === 'ArrowRight' || e.key === 'd') keys['right'] = true;
+});
+
+window.addEventListener('keyup', function(e) {
+    if (e.key === 'ArrowLeft' || e.key === 'a') keys['left'] = false;
+    if (e.key === 'ArrowRight' || e.key === 'd') keys['right'] = false;
+});
+
+canvas.addEventListener('touchstart', function(e) {
+    e.preventDefault();
+    const touchX = e.touches.clientX;
+    const rect = canvas.getBoundingClientRect();
+    const canvasTouchX = touchX - rect.left;
+
+    if (canvasTouchX < rect.width / 2) {
+        keys['left'] = true;
+        keys['right'] = false;
+    } else {
+        keys['left'] = false;
+        keys['right'] = true;
+    }
+});
+
+canvas.addEventListener('touchend', function(e) {
+    e.preventDefault();
+    keys['left'] = false;
+    keys['right'] = false;
+});
+
+document.getElementById('start-btn').addEventListener('click', startGame);
+document.getElementById('retry-btn').addEventListener('click', startGame);
+
+function setScreenState(id, show) {
+    const el = document.getElementById(id);
+    if (show) {
+        el.classList.remove('hidden');
+        el.classList.add('visible');
+    } else {
+        el.classList.remove('visible');
+        el.classList.add('hidden');
+    }
+}
+
+function startGame() {
+    score = 0;
+    frameCount = 0;
+    guardCount = 0;
+    invincibleTimer = 0;
+    lastOrbTime = 0;
+    player.x = canvas.width / 2 - player.width / 2;
+    obstacles = [];
+    expOrbs = [];
+    shields = [];
+    popups = [];
+    gameState = 'PLAYING';
+
+    setScreenState('start-screen', false);
+    setScreenState('gameover-screen', false);
+}
+
+function gameOver() {
+    gameState = 'GAMEOVER';
+
+    // ベストスコア保存
+    if (score > bestScore) {
+        bestScore = score;
+        try {
+            localStorage.setItem('craft_dodge_best', bestScore.toString());
+        } catch (e) {}
+    }
+
+    document.getElementById('score-text').innerText = 'SCORE: ' + Math.floor(score);
+    document.getElementById('best-score-text').innerText = 'BEST SCORE: ' + Math.floor(bestScore);
+    setScreenState('gameover-screen', true);
+}
+
+function addPopup(text, x, y, color) {
+    popups.push({ text: text, x: x, y: y, opacity: 1.0, color: color || '#55ff55' });
+}
+
+function isColliding(a, b) {
+    return a.x < b.x + b.width &&
+           a.x + a.width > b.x &&
+           a.y < b.y + b.height &&
+           a.y + a.height > b.y;
+}
+
+// ----------------------------------------------------
+// 描画処理
+// ----------------------------------------------------
+
+function drawSteve(x, y, w, h) {
+    ctx.globalAlpha = 1.0;
+    if (invincibleTimer > 0 && Math.floor(frameCount / 4) % 2 === 0) {
+        ctx.globalAlpha = 0.4;
+    }
+
+    const bw = w / 8;
+    const bh = h / 12;
+
+    ctx.fillStyle = '#4a2e12';
+    ctx.fillRect(x, y, w, bh * 3);
+
+    ctx.fillStyle = '#c68b59';
+    ctx.fillRect(x, y + bh * 3, w, bh * 4);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(x + bw, y + bh * 4, bw * 2, bh);
+    ctx.fillRect(x + bw * 5, y + bh * 4, bw * 2, bh);
+    ctx.fillStyle = '#2c3b8e';
+    ctx.fillRect(x + bw * 2, y + bh * 4, bw, bh);
+    ctx.fillRect(x + bw * 5, y + bh * 4, bw, bh);
+
+    ctx.fillStyle = '#4a2e12';
+    ctx.fillRect(x + bw * 3, y + bh * 5.5, bw * 2, bh);
+
+    ctx.fillStyle = '#00a2ac';
+    ctx.fillRect(x, y + bh * 7, w, bh * 3);
+
+    ctx.fillStyle = '#2c3b8e';
+    ctx.fillRect(x + bw, y + bh * 10, bw * 6, bh * 2);
+
+    if (guardCount > 0) {
+        ctx.strokeStyle = '#55ff55';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(x + w / 2, y + h / 2, w * 0.75, 0, Math.PI * 2);
+        ctx.stroke();
+    }
+
+    ctx.globalAlpha = 1.0;
+}
+
+function drawCreeper(x, y, w, h) {
+    ctx.globalAlpha = 1.0;
+    ctx.fillStyle = '#38b000';
+    ctx.fillRect(x, y, w, h);
+
+    ctx.fillStyle = '#000000';
+    const bw = w / 8;
+    const bh = h / 8;
+
+    ctx.fillRect(x + bw * 1.5, y + bh * 1.5, bw * 2, bh * 2);
+    ctx.fillRect(x + bw * 4.5, y + bh * 1.5, bw * 2, bh * 2);
+    ctx.fillRect(x + bw * 3, y + bh * 3.5, bw * 2, bh * 2.5);
+    ctx.fillRect(x + bw * 2, y + bh * 5, bw, bh * 2.5);
+    ctx.fillRect(x + bw * 5, y + bh * 5, bw, bh * 2.5);
+}
+
+function drawExpOrb(x, y, size) {
+    ctx.globalAlpha = 1.0;
+    const half = size / 2;
+    const pulse = Math.sin(frameCount * 0.2) * 2;
+
+    ctx.fillStyle = (Math.floor(frameCount / 6) % 2 === 0) ? '#70e000' : '#ccff00';
+
+    ctx.beginPath();
+    ctx.moveTo(x + half, y - pulse);
+    ctx.lineTo(x + size + pulse, y + half);
+    ctx.lineTo(x + half, y + size + pulse);
+    ctx.lineTo(x - pulse, y + half);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(x + half - 2, y + half - 2, 4, 4);
+}
+
+function drawShield(x, y, w, h) {
+    ctx.globalAlpha = 1.0;
+    ctx.fillStyle = '#d0d0d0';
+    ctx.fillRect(x, y, w, h);
+
+    ctx.fillStyle = '#8b5a2b';
+    ctx.fillRect(x + 3, y + 3, w - 6, h - 6);
+
+    ctx.fillStyle = '#a0a0a0';
+    ctx.fillRect(x + w / 2 - 2, y + 4, 4, h - 8);
+    ctx.fillRect(x + 4, y + h / 2 - 2, w - 8, 4);
+}
+
+// ----------------------------------------------------
+// ゲーム更新・計算処理
+// ----------------------------------------------------
+
+function update() {
+    if (gameState !== 'PLAYING') return;
+
+    frameCount++;
+
+    if (invincibleTimer > 0) invincibleTimer--;
+
+    // プレイヤー移動（スピード8）
+    if (keys['left'] && player.x > 0) {
+        player.x -= player.speed;
+    }
+    if (keys['right'] && player.x < canvas.width - player.width) {
+        player.x += player.speed;
+    }
+
+    // クリーパー（障害物）落下
+    if (frameCount % 36 === 0) {
+        obstacles.push({
+            x: Math.random() * (canvas.width - 36),
+            y: -40,
+            width: 36,
+            height: 36,
+            speed: 3.2 + Math.random() * 1.6
+        });
+    }
+
+    // 経験値オーブ（スコア玉）落下
+    if (frameCount % 60 === 0) {
+        expOrbs.push({
+            x: Math.random() * (canvas.width - 20),
+            y: -20,
+            width: 20,
+            height: 20,
+            speed: 3.5
+        });
+    }
+
+    // 盾アイテム（ガード）落下
+    if (frameCount % 210 === 0) {
+        shields.push({
+            x: Math.random() * (canvas.width - 26),
+            y: -32,
+            width: 26,
+            height: 32,
+            speed: 3.0
+        });
+    }
+
+    // クリーパー更新＆判定
+    for (let i = obstacles.length - 1; i >= 0; i--) {
+        let obs = obstacles[i];
+        obs.y += obs.speed;
+
+        if (isColliding(player, obs)) {
+            if (invincibleTimer > 0) {
+                // 無敵中
+            } else if (guardCount > 0) {
+                guardCount--;
+                invincibleTimer = 90;
+                obstacles.splice(i, 1);
+                addPopup('GUARDED!', player.x, player.y - 20, '#ffff00');
+                continue;
+            } else {
+                gameOver();
+                return;
+            }
+        }
+
+        if (obs.y > canvas.height) {
+            obstacles.splice(i, 1);
+        }
+    }
+
+    // 経験値オーブ更新＆判定（基本300pt、1秒以内連取で+10）
+    for (let i = expOrbs.length - 1; i >= 0; i--) {
+        let orb = expOrbs[i];
+        orb.y += orb.speed;
+
+        if (isColliding(player, orb)) {
+            const currentTime = (new Date()).getTime();
+            let addedScore = 300;
+
+            if (lastOrbTime > 0 && (currentTime - lastOrbTime) <= 1000) {
+                addedScore += 10;
+                addPopup('+310 COMBO!', orb.x, orb.y, '#ffaa00');
+            } else {
+                addPopup('+300', orb.x, orb.y, '#55ff55');
+            }
+
+            score += addedScore;
+            lastOrbTime = currentTime;
+            expOrbs.splice(i, 1);
+            continue;
+        }
+
+        if (orb.y > canvas.height) {
+            expOrbs.splice(i, 1);
+        }
+    }
+
+    // 盾アイテム更新＆判定
+    for (let i = shields.length - 1; i >= 0; i--) {
+        let sh = shields[i];
+        sh.y += sh.speed;
+
+        if (isColliding(player, sh)) {
+            if (guardCount < MAX_GUARD) {
+                guardCount++;
+                addPopup('SHIELD GET!', sh.x, sh.y, '#00ffff');
+            } else {
+                addPopup('MAX SHIELD!', sh.x, sh.y, '#cccccc');
+            }
+            shields.splice(i, 1);
+            continue;
+        }
+
+        if (sh.y > canvas.height) {
+            shields.splice(i, 1);
+        }
+    }
+
+    // ポップアップテキスト更新
+    for (let i = popups.length - 1; i >= 0; i--) {
+        let p = popups[i];
+        p.y -= 1;
+        p.opacity -= 0.02;
+        if (p.opacity <= 0) popups.splice(i, 1);
+    }
+}
+
+function draw() {
+    ctx.fillStyle = '#1e1e1e';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    if (gameState === 'PLAYING') {
+        obstacles.forEach(function(obs) {
+            drawCreeper(obs.x, obs.y, obs.width, obs.height);
+        });
+
+        expOrbs.forEach(function(orb) {
+            drawExpOrb(orb.x, orb.y, orb.width);
+        });
+
+        shields.forEach(function(sh) {
+            drawShield(sh.x, sh.y, sh.width, sh.height);
+        });
+
+        drawSteve(player.x, player.y, player.width, player.height);
+
+        popups.forEach(function(p) {
+            ctx.globalAlpha = p.opacity;
+            ctx.fillStyle = p.color;
+            ctx.font = 'bold 14px sans-serif';
+            ctx.fillText(p.text, p.x, p.y);
+            ctx.globalAlpha = 1.0;
+        });
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 15px monospace';
+        ctx.fillText('SCORE: ' + Math.floor(score), 15, 30);
+
+        let guardStr = 'SHIELD: ';
+        for (let i = 0; i < MAX_GUARD; i++) {
+            guardStr += (i < guardCount) ? '🛡️' : '⚪';
+        }
+        ctx.textAlign = 'right';
+        ctx.fillText(guardStr, canvas.width - 15, 30);
+        ctx.textAlign = 'left';
+    }
+}
+
+function gameLoop() {
+    update();
+    draw();
+    requestAnimationFrame(gameLoop);
+}
+
+gameLoop();
+</script>
+
+</body>
+</html>
